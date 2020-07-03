@@ -1,0 +1,279 @@
+- dotnet add package Microsoft.EntityFrameworkCore
+- dotnet add package Microsoft.EntityFrameworkCoreMicrosoft.EntityFrameworkCore.SqlServer
+- Criar os Models (Classes com as propriedades. Essas propriedades vão virar os campos das tabelas)
+  Exemplo:
+	   public class Product
+		{
+			public int Id { get; set; }
+			public string Title { get; set; }
+			public string Description { get; set; }
+			public decimal Price { get; set; }
+			public int Quantity { get; set; }
+			public string Image { get; set; }
+			public DateTime CreateDate { get; set; }
+			public DateTime LastUpdateDate { get; set; }
+			public int CategoryId { get; set; }
+			public Category Category { get; set; }
+		}
+- Criar um Data Context (Onde ficará a string de conexão com o banco. É uma representação do banco de dados em memória)
+  Exemplo:
+      public class StoreDataContext : DbContext
+		{
+			public DbSet<Product> Products { get; set; }
+			public DbSet<Category> Categories { get; set; }
+
+			protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
+			{
+				optionsBuilder.UseSqlServer(@"Server=10.173.109.8\BOTIDEV2016;User ID=testador;Password=test123;Database=prodcat;Max Pool Size=1000;");
+			}
+		}
+- Criar dentro da pasta Data uma pasta Maps e colocar uma classe de mapeamento para cada Classe/Tabela
+  Exemplo:
+    public class ProductMap : IEntityTypeConfiguration<Product>
+    {
+        public void Configure(EntityTypeBuilder<Product> builder)
+        {
+            builder.ToTable("Product");
+            builder.HasKey(x => x.Id);
+            builder.Property(x => x.CreateDate).IsRequired();
+            builder.Property(x => x.Description).IsRequired().HasMaxLength(1024).HasColumnType("varchar(1024)");
+            builder.Property(x => x.Image).IsRequired().HasMaxLength(1024).HasColumnType("varchar(1024)");
+            builder.Property(x => x.LastUpdateDate).IsRequired();
+            builder.Property(x => x.Price).IsRequired().HasColumnType("money");
+            builder.Property(x => x.Quantity).IsRequired();
+            builder.Property(x => x.Title).IsRequired().HasMaxLength(120).HasColumnType("varchar(120)");
+            builder.HasOne(x => x.Category).WithMany(x => x.Products);
+        }
+    }
+
+- Colocar no Data Context um overrride do método de criação do Model para respeitar os arquivos de Maps
+  Exemplo:
+	protected override void OnModelCreating(ModelBuilder builder)
+        {
+            builder.ApplyConfiguration(new ProductMap());
+            builder.ApplyConfiguration(new CategoryMap());
+        }
+
+- Editar o arquivo .csproj e adicionar o seguinte:
+  <ItemGroup>
+    <DotNetCliToolReference Include="Microsoft.EntityFrameworkCore.Tools.Dotnet" Version="2.0.3" />    
+  </ItemGroup>
+  
+- dotnet restore
+- dotnet ef migrations add initial (Gera um script para a criação do banco e tabelas)
+- dotnet ef database update (Cria o banco e tabelas de acordo com as classes acima)
+
+- Para cada alteração de classes que afeta o banco, deve-se executar novamente o comando de Migration ex: dotnet ef migrations add v1 (v1 é um nome qualquer para o Migration).
+- Para cada alteração de classes que afeta o banco, deve-se executar novamente o comando de Update no banco ex: dotnet ef database update
+
+
+MVC -------------------------------------------------
+
+- dotnet add package Microsoft.AspNetCore.Mvc
+
+- Principais Verbos: 
+	GET - Cabeçalho apenas
+	POST - Cabeçalho e Corpo
+	PUT - Cabeçalho e Corpo
+	DELETE - Cabeçalho e Corpo
+	
+- Criar as ViewModels (Objetos de transporte e adequação dos dados para a tela por exemplo)
+	Exemplo:
+		public class EditorProductViewModel : Notifiable, IValidatable
+		{
+			public int Id { get; set; }
+			public string Title { get; set; }
+			public string Description { get; set; }
+			public decimal Price { get; set; }
+			public int Quantity { get; set; }
+			public string Image { get; set; }
+			public int CategoryId { get; set; }
+
+			public void Validate()
+			{
+				AddNotifications(
+					new Contract()
+						.HasMaxLen(Title, 120, "Title", "O título deve conter até 120 caracteres")
+						.HasMinLen(Title, 3, "Title", "O título deve conter pelo menos 3 caracteres")
+						.IsGreaterThan(Price, 0, "Price", "O preço deve ser maior que zero")
+				);
+			}
+		}
+		
+- Criar o  Repository (Onde ficará centralizado todos os comandos que vão direto no banco)		
+Exemplo:
+    public class ProductRepository
+    {
+        private readonly StoreDataContext _context;
+
+        public ProductRepository(StoreDataContext context)
+        {
+            _context = context;
+        }
+
+        public IEnumerable<ListProductViewModel> Get()
+        {
+            return _context
+                .Products
+                .Include(x => x.Category)
+                .Select(x => new ListProductViewModel
+                {
+                    Id = x.Id,
+                    Title = x.Title,
+                    Price = x.Price,
+                    Category = x.Category.Title,
+                    CategoryId = x.Category.Id
+                })
+                .AsNoTracking()
+                .ToList();
+        }
+        public Product Get(int id)
+        {
+            return _context.Products.Find(id);
+        }
+        public void Save(Product product)
+        {
+            _context.Products.Add(product);
+            _context.SaveChanges();
+        }
+        public void Update(Product product)
+        {
+            _context.Entry<Product>(product).State = EntityState.Modified;
+            _context.SaveChanges();
+        }
+    }
+	
+- Colocar alguns métodos para fazer Cache
+	Exemplo:
+		[ResponseCache(Duration = 3600)]
+		
+- Colocar compressão em todas as requisições. Instalar Microsoft.AspNetCore.ResponseCompression
+	Exemplo
+			    public class Startup
+				{
+					public void ConfigureServices(IServiceCollection services)
+					{
+						services.AddMvc(option => option.EnableEndpointRouting = false);
+						services.AddResponseCompression(); //Adicionar copmressão para todas as requisições
+
+						services.AddScoped<StoreDataContext, StoreDataContext>();
+						services.AddTransient<ProductRepository, ProductRepository>();
+					}
+
+					public void Configure(IApplicationBuilder app, IWebHostEnvironment env)
+					{
+						if (env.IsDevelopment())
+						{
+							app.UseDeveloperExceptionPage();
+						}
+
+						app.UseMvc();
+						app.UseResponseCompression(); //Adicionar copmressão para todas as requisições
+					}
+				}
+	
+- Documentação da API. Addicionar Swashbuckle.AspNetCore e Swashbuckle.AspNetCore.Swagger
+	Exemplo
+		public class Startup
+			{
+				public void ConfigureServices(IServiceCollection services)
+				{
+					services.AddMvc(option => option.EnableEndpointRouting = false);
+					services.AddResponseCompression(); //Adicionar copmressão para todas as requisiçõesx
+
+					services.AddScoped<StoreDataContext, StoreDataContext>();
+					services.AddTransient<ProductRepository, ProductRepository>();
+
+					services.AddSwaggerGen(x =>
+					{
+						x.SwaggerDoc("v1", new Microsoft.OpenApi.Models.OpenApiInfo { Title="Catalog Product", Version = "v1" });
+					});
+				}
+
+				public void Configure(IApplicationBuilder app, IWebHostEnvironment env)
+				{
+					if (env.IsDevelopment())
+					{
+						app.UseDeveloperExceptionPage();
+					}
+
+					app.UseMvc();
+					app.UseResponseCompression(); //Adicionar copmressão para todas as requisições
+
+					app.UseSwagger();
+					app.UseSwaggerUI(c =>
+					{
+						c.SwaggerEndpoint("/swagger/v1/swagger.json", "Product Catalog - v1");
+					});
+				}
+			}
+			
+			
+UnitOfWork(Gerenciar as transações no banco de dados) -------------------------------------------------
+
+- Criar a interface de UnitOfWork dentro da pasta Data
+Exemplo
+	public interface IUnitOfWork
+    {
+        void Commit();
+        void Rollback();
+    }	
+	
+- Criar a classe de UnitOfWork dentro da pasta Data
+Exemplo
+	 public class UnitOfWork : IUnitOfWork
+    {
+        private readonly StoreDataContext _context;
+
+        public UnitOfWork(StoreDataContext context)
+        {
+            _context = context;
+        }
+
+        public void Commit()
+        {
+            _context.SaveChanges();
+        }
+
+        public void Rollback()
+        {
+            // Nesse caso não precisamos fazer nada, vamos deixar para o Garbage Collector entrar em ação e remover da memória.
+        }
+    }
+	
+- Remover o SaveChanges() dos repositórios
+- Alterar os Controllers para realizar o Commit atraves do UnitOfWork
+Exemplo
+	[Route("v2/products")]
+	[HttpPost]
+	public ResultViewModel Post(
+		[FromBody]Product product,            
+		[FromServices] IUnitOfWork uow
+	)
+	{
+		try
+		{
+			_repository.Save(product);
+
+			uow.Commit(); // Irá Utilizar o UnitOfWork para salvar, o UnitOfWork controla a transaçao no banco de dados.
+
+			return new ResultViewModel
+			{
+				Success = true,
+				Message = "Produto cadastrado com sucesso!",
+				Data = product
+			};
+		}
+		catch (Exception ex)
+		{
+			uow.Rollback(); // Irá Utilizar o UnitOfWork para salvar, o UnitOfWork controla a transaçao no banco de dados.
+
+			return new ResultViewModel
+			{
+				Success = false,
+				Message = "Erro ao cadastrar Produto: " + ex.Message,
+				Data = product
+			};
+		}
+	}
+			
